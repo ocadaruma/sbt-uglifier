@@ -9,7 +9,7 @@ object Uglifier {
     sources.map(wrapToPackageBlock).mkString(";")
   }
 
-  def wrapToPackageBlock(aSource: String) = {
+  private def wrapToPackageBlock(aSource: String) = {
 
     val Some(compilationUnit: CompilationUnit) = ScalaParser.parse(aSource)
 
@@ -31,10 +31,10 @@ object Uglifier {
 
     val pkgId = pkgTokens.map(_.text).mkString(".")
 
-    s"package ${pkgId} { ${toOneline(pkgContent)} };"
+    s"package ${pkgId}{${(shrink(pkgContent))}};"
   }
 
-  def flattenCallExpr(expr: CallExpr): List[Token] = {
+  private def flattenCallExpr(expr: CallExpr): List[Token] = {
     def loop(current: CallExpr, result: List[Token]): List[Token] = {
       current match {
         case CallExpr(Some((elements, _)), id, _, _, _) =>
@@ -49,28 +49,71 @@ object Uglifier {
     loop(expr, Nil)
   }
 
-  def toOneline(source: String): String = {
-    toOneline(ScalaLexer.tokenise(source))
-  }
+  private def shrink(aSource: String): String = {
 
-  def toOneline(tokens: List[Token]): String = {
-    def handleRawStringLiteral(literal: String): String = {
-      val RawStringRegex = "(?ms)\"\"\"(.*)\"\"\"".r
-      literal match {
-        case RawStringRegex(content) =>
-          "\"" + content.replace("\n", "\\n") + "\""
+    val lineSeparator = System.lineSeparator()
+    val separatorReplacement = lineSeparator match {
+      case "\r\n" => "\\r\\n"
+      case "\n" => "\\n"
+    }
+    val separatorAdjustment = separatorReplacement.length - lineSeparator.length
+
+    val tokens = ScalaLexer.tokenise(aSource)
+    val buffer = new StringBuilder(aSource)
+
+    var adjustment = 0
+    for {
+      token <- tokens
+    } {
+      token.tokenType match {
+        case Tokens.NEWLINE | Tokens.NEWLINES =>
+          val length = token.lastCharacterOffset - token.offset + 1
+          val offset = token.offset - adjustment
+
+          // replace new line tokens with semicolon
+          buffer.replace(offset, offset + length, ";")
+          adjustment += length - 1
+
         case _ =>
-          literal
+          // replace hidden tokens with single whitespace
+          val hiddens = token.associatedWhitespaceAndComments
+          if (hiddens.nonEmpty) {
+            val length = hiddens.lastCharacterOffset - hiddens.offset + 1
+            val offset = hiddens.offset - adjustment
+
+            buffer.replace(offset, offset + length, " ")
+            adjustment += length - 1
+          }
+
+          token.tokenType match {
+            // replace raw String literal with normal String literal
+            case Tokens.STRING_PART | Tokens.STRING_LITERAL =>
+              if (token.rawText.startsWith("\"\"\"")) {
+                val offset = token.offset - adjustment
+                buffer.replace(offset, offset + 3, "\"")
+                adjustment += 2
+              }
+
+              for {
+                m <- lineSeparator.r.findAllMatchIn(token.rawText)
+              } {
+                val length = m.end - m.start
+                val offset = token.offset + m.start - adjustment
+                buffer.replace(offset, offset + length, separatorReplacement)
+                adjustment -= separatorAdjustment
+              }
+
+              if (token.rawText.endsWith("\"\"\"")) {
+                val offset = token.lastCharacterOffset - 2 - adjustment
+                buffer.replace(offset, offset + 3, "\"")
+                adjustment += 2
+              }
+
+            case _ =>
+          }
       }
     }
 
-    tokens.map { token =>
-      token.tokenType match {
-        case Tokens.NEWLINE | Tokens.NEWLINES => ";"
-        case Tokens.INTERPOLATION_ID => token.text
-        case Tokens.STRING_LITERAL => handleRawStringLiteral(token.text) + " "
-        case _ => token.text + " "
-      }
-    }.mkString
+    buffer.result()
   }
 }
