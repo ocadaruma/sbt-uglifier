@@ -5,7 +5,7 @@ import scalariform.parser._
 
 object Uglifier {
 
-  def uglify(sources: List[String]): String = {
+  def uglify(sources: Seq[String]): String = {
     sources.map(wrapToPackageBlock).mkString(";")
   }
 
@@ -34,8 +34,8 @@ object Uglifier {
     s"package ${pkgId}{${(shrink(pkgContent))}};"
   }
 
-  private def flattenCallExpr(expr: CallExpr): List[Token] = {
-    def loop(current: CallExpr, result: List[Token]): List[Token] = {
+  private def flattenCallExpr(expr: CallExpr): Seq[Token] = {
+    def loop(current: CallExpr, result: Seq[Token]): Seq[Token] = {
       current match {
         case CallExpr(Some((elements, _)), id, _, _, _) =>
           elements.collect { case e: CallExpr => e }.flatMap { expr =>
@@ -46,7 +46,7 @@ object Uglifier {
       }
     }
 
-    loop(expr, Nil)
+    loop(expr, Vector.empty)
   }
 
   private def shrink(aSource: String): String = {
@@ -88,25 +88,42 @@ object Uglifier {
           token.tokenType match {
             // replace raw String literal with normal String literal
             case Tokens.STRING_PART | Tokens.STRING_LITERAL =>
-              if (token.rawText.startsWith("\"\"\"")) {
-                val offset = token.offset - adjustment
-                buffer.replace(offset, offset + 3, "\"")
-                adjustment += 2
-              }
+              if (isRawStringLiteral(token.rawText)) {
+                var contentOffset = 0
+                var contentInset = 0
 
-              for {
-                m <- lineSeparator.r.findAllMatchIn(token.rawText)
-              } {
-                val length = m.end - m.start
-                val offset = token.offset + m.start - adjustment
-                buffer.replace(offset, offset + length, separatorReplacement)
-                adjustment -= separatorAdjustment
-              }
+                if (token.rawText.startsWith("\"\"\"")) {
+                  val offset = token.offset - adjustment
+                  buffer.replace(offset, offset + 3, "\"")
+                  adjustment += 2
+                  contentOffset = 3
+                } else if (token.rawText.startsWith("\"")) {
+                  contentOffset = 1
+                }
 
-              if (token.rawText.endsWith("\"\"\"")) {
-                val offset = token.lastCharacterOffset - 2 - adjustment
-                buffer.replace(offset, offset + 3, "\"")
-                adjustment += 2
+                for {
+                  m <- lineSeparator.r.findAllMatchIn(token.rawText)
+                } {
+                  val length = m.end - m.start
+                  val offset = token.offset + m.start - adjustment
+                  buffer.replace(offset, offset + length, separatorReplacement)
+                  adjustment -= separatorAdjustment
+                }
+
+                if (token.rawText.endsWith("\"\"\"")) {
+                  val offset = token.lastCharacterOffset - 2 - adjustment
+                  buffer.replace(offset, offset + 3, "\"")
+                  adjustment += 2
+                  contentInset = 3
+                } else if (token.rawText.endsWith("\"")) {
+                  contentInset = 1
+                }
+
+                val content = aSource.substring(
+                  token.offset + contentOffset,
+                  token.offset + token.length - contentInset)
+
+                content
               }
 
             case _ =>
@@ -115,5 +132,20 @@ object Uglifier {
     }
 
     buffer.result()
+  }
+
+  private def isRawStringLiteral(string: String): Boolean = {
+    string.startsWith("\"\"\"") || string.endsWith("\"\"\"")
+  }
+
+  sealed abstract class StringLiteral { def content: String }
+  object StringLiteral {
+    case class LeftPart(content: String) extends StringLiteral
+    case class RightPart(content: String) extends StringLiteral
+    case class FullLiteral(content: String) extends StringLiteral
+
+    def apply(token: Token): StringLiteral = {
+
+    }
   }
 }
