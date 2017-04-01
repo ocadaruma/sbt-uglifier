@@ -51,13 +51,6 @@ object Uglifier {
 
   private def shrink(aSource: String): String = {
 
-    val lineSeparator = System.lineSeparator()
-    val separatorReplacement = lineSeparator match {
-      case "\r\n" => "\\r\\n"
-      case "\n" => "\\n"
-    }
-    val separatorAdjustment = separatorReplacement.length - lineSeparator.length
-
     val tokens = ScalaLexer.tokenise(aSource)
     val buffer = new StringBuilder(aSource)
 
@@ -88,42 +81,47 @@ object Uglifier {
           token.tokenType match {
             // replace raw String literal with normal String literal
             case Tokens.STRING_PART | Tokens.STRING_LITERAL =>
-              if (isRawStringLiteral(token.rawText)) {
-                var contentOffset = 0
-                var contentInset = 0
+              val literal = StringLiteral(token)
 
-                if (token.rawText.startsWith("\"\"\"")) {
-                  val offset = token.offset - adjustment
-                  buffer.replace(offset, offset + 3, "\"")
-                  adjustment += 2
-                  contentOffset = 3
-                } else if (token.rawText.startsWith("\"")) {
-                  contentOffset = 1
+              if (literal.isRaw) {
+                var (contentOffset, contentInset) = (0, 0)
+                literal match {
+                  case StringLiteral.RawLeftPart(offset) =>
+                    contentOffset = offset
+                  case StringLiteral.RawRightPart(inset) =>
+                    contentInset = inset
+                  case StringLiteral.RawFullLiteral(offset, inset) =>
+                    contentOffset = offset
+                    contentInset = inset
+                  case _ =>
                 }
 
+                if (contentOffset == 3) {
+                  val offset = token.offset - adjustment
+                  buffer.replace(offset, offset + contentOffset, "\"")
+                  adjustment += 2
+                }
+
+                val content = token.rawText.substring(contentOffset, token.rawText.length - contentInset)
                 for {
-                  m <- lineSeparator.r.findAllMatchIn(token.rawText)
+                  m <- "\r|\n|\"".r.findAllMatchIn(content)
                 } {
                   val length = m.end - m.start
-                  val offset = token.offset + m.start - adjustment
-                  buffer.replace(offset, offset + length, separatorReplacement)
-                  adjustment -= separatorAdjustment
+                  val offset = token.offset + m.start + contentOffset - adjustment
+
+                  m.group(0) match {
+                    case "\r" => buffer.replace(offset, offset + length, "\\r")
+                    case "\n" => buffer.replace(offset, offset + length, "\\n")
+                    case "\"" => buffer.replace(offset, offset + length, "\\\"")
+                  }
+                  adjustment -= 1
                 }
 
-                if (token.rawText.endsWith("\"\"\"")) {
+                if (contentInset == 3) {
                   val offset = token.lastCharacterOffset - 2 - adjustment
                   buffer.replace(offset, offset + 3, "\"")
                   adjustment += 2
-                  contentInset = 3
-                } else if (token.rawText.endsWith("\"")) {
-                  contentInset = 1
                 }
-
-                val content = aSource.substring(
-                  token.offset + contentOffset,
-                  token.offset + token.length - contentInset)
-
-                content
               }
 
             case _ =>
@@ -134,30 +132,36 @@ object Uglifier {
     buffer.result()
   }
 
-  private def isRawStringLiteral(string: String): Boolean = {
-    string.startsWith("\"\"\"") || string.endsWith("\"\"\"")
-  }
-
-  sealed abstract class StringLiteral {
-    def content: String
-    def rawToken: Token
-  }
+  sealed abstract class StringLiteral { def isRaw: Boolean = this != StringLiteral.Normal }
   object StringLiteral {
-    case class LeftPart(content: String, rawToken: Token) extends StringLiteral
-    case class RightPart(content: String, rawToken: Token) extends StringLiteral
-    case class FullLiteral(content: String, rawToken: Token) extends StringLiteral
+    case class RawLeftPart(contentOffset: Int) extends StringLiteral
+    case class RawRightPart(contentInset: Int) extends StringLiteral
+    case class RawFullLiteral(contentOffset: Int, contentInset: Int) extends StringLiteral
+    case object Normal extends StringLiteral
 
     def apply(token: Token): StringLiteral = {
       token.tokenType match {
         case Tokens.STRING_PART =>
           if (token.rawText.startsWith("\"\"\"")) {
-
+            RawLeftPart(3)
           } else {
-
+            Normal
           }
         case Tokens.STRING_LITERAL =>
-
+          if (token.rawText.surroundedBy("\"\"\"", "\"\"\"")) {
+            RawFullLiteral(3, 3)
+          } else if (token.rawText.endsWith("\"\"\"")) {
+            RawRightPart(3)
+          } else {
+            Normal
+          }
       }
+    }
+  }
+
+  implicit class RichString(val self: String) extends AnyVal {
+    def surroundedBy(left: String, right: String): Boolean = {
+      self.startsWith(left) && self.endsWith(right) && (self.length >= left.length + right.length)
     }
   }
 }
