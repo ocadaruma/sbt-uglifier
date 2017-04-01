@@ -6,10 +6,10 @@ import scalariform.parser._
 object Uglifier {
 
   def uglify(sources: Seq[String]): String = {
-    sources.map(wrapToPackageBlock).mkString(";")
+    sources.map(wrapWithPackageBlock).mkString(";")
   }
 
-  private def wrapToPackageBlock(aSource: String) = {
+  private def wrapWithPackageBlock(aSource: String) = {
 
     val Some(compilationUnit: CompilationUnit) = ScalaParser.parse(aSource)
 
@@ -138,14 +138,26 @@ object Uglifier {
     string.startsWith("\"\"\"") || string.endsWith("\"\"\"")
   }
 
-  sealed abstract class StringLiteral { def content: String }
+  sealed abstract class StringLiteral {
+    def content: String
+    def rawToken: Token
+  }
   object StringLiteral {
-    case class LeftPart(content: String) extends StringLiteral
-    case class RightPart(content: String) extends StringLiteral
-    case class FullLiteral(content: String) extends StringLiteral
+    case class LeftPart(content: String, rawToken: Token) extends StringLiteral
+    case class RightPart(content: String, rawToken: Token) extends StringLiteral
+    case class FullLiteral(content: String, rawToken: Token) extends StringLiteral
 
     def apply(token: Token): StringLiteral = {
+      token.tokenType match {
+        case Tokens.STRING_PART =>
+          if (token.rawText.startsWith("\"\"\"")) {
 
+          } else {
+
+          }
+        case Tokens.STRING_LITERAL =>
+
+      }
     }
   }
 }
