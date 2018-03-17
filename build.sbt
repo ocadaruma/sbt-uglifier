@@ -4,7 +4,7 @@ organizationName := "Haruki Okada"
 
 name := "sbt-uglifier"
 
-version := "1.0-SNAPSHOT"
+version := "1.0"
 
 crossSbtVersions := Seq("0.13.15", "1.0.2")
 
